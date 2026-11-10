@@ -2,9 +2,9 @@
 """
 Build Stremio v4.4 for VIDAA.
 
-  python build.py            # build docs/ (downloads upstream once, then cached)
+  python build.py            # build v4-build/ (downloads upstream once, then cached)
   python build.py --refresh  # re-download upstream shell-v4.4
-  python build.py --serve    # build, then serve docs/ on http://0.0.0.0:8044
+  python build.py --serve    # build, then serve v4-build/ on http://0.0.0.0:8044
 
 Upstream (Stremio's own v4.4 shell) is NOT modified apart from making its
 root-absolute "/images/..." paths relative, so the build works from any
@@ -21,7 +21,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 UPSTREAM_URL = "https://app.strem.io/shell-v4.4/"
 CACHE = os.path.join(ROOT, "upstream", "shell-v4.4")
 SRC = os.path.join(ROOT, "src")
-DIST = os.path.join(ROOT, "docs")  # GitHub Pages serves /docs from main
+DIST = os.path.join(ROOT, "v4-build")  # v4 output; docs/ now holds the Theater (MVP core) build
+# To put v4 back on the site:  python build.py && copy v4-build/* over docs/  (or: git checkout v4-stable -- docs)
 UA = {"User-Agent": "Mozilla/5.0 (build script)"}
 
 ASSET_RE = re.compile(
@@ -161,7 +162,7 @@ def main():
         shutil.copyfile(icon, os.path.join(DIST, "icon.png"))
     open(os.path.join(DIST, ".nojekyll"), "w").close()
 
-    print("[4/4] done: docs/ (layer version " + version + ")")
+    print("[4/4] done: v4-build/ (layer version " + version + ")")
 
     if "--serve" in sys.argv:
         import functools
