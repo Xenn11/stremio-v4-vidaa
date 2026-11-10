@@ -8,6 +8,18 @@
 }
 input:focus { outline-offset: 0; }
 
+/* Player remote focus (buttons, seek bar, menu entries) */
+.vidaa-focus {
+    outline: 3px solid #8a5aff !important;
+    outline-offset: 3px;
+    border-radius: 8px;
+    background-color: rgba(138, 90, 255, .28) !important;
+}
+#controlbar input.vidaa-focus { outline-offset: 6px; }
+
+/* TV volume only (like Netflix) and no casting without a streaming server */
+#volumeControl, #castingControl { display: none !important; }
+
 /* Desktop-app nags that make no sense on a TV */
 #updateModal,
 .bottom-notification { display: none !important; }

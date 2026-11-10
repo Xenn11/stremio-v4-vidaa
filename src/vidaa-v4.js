@@ -22,7 +22,9 @@
  *                textTracks "show-then-disable" quirk and cue positioning
  *                                                                (video/VidaaVideo)
  *   sub delay    embedded subtitle delay                        (subtitles/embedded-delay)
- *   speed/vol    persist playback volume                        (player/speed-volume-persist)
+ *   volume       app volume pinned at 100% (TV volume only, like Netflix)
+ *   player remote Netflix-style D-pad model for v4's mouse-only player
+ *   nav sections tab bar + top bar reachable with the D-pad
  *   info         codec/resolution overlay on Blue               (player/resolution-indicator)
  */
 (function () {
@@ -103,7 +105,7 @@
         play: 415, pause: 19, playPause: [10252, 179], stop: 413,
         ff: 417, rw: 412,
         up: 38, down: 40, left: 37, right: 39, enter: 13,
-        f: 70, f11: 122,
+        f: 70, f11: 122, escape: 27, backspace: 8,
         subtitle: [460, 10221], audio: [10222]
     };
     var regs = [], seq = 0;
@@ -284,6 +286,88 @@
         }, 300);
     })();
 
+    /* ======================================================= nav sections
+     * v4 registers a js-spatial-navigation section per page (board,
+     * discover, detail...), but the left tab bar (Board / Discover /
+     * Library / Calendar / Addons / Settings) and the top bar (back,
+     * search, account) belong to no section, so the D-pad can never reach
+     * them. Register them as sections; js-spatial-navigation then crosses
+     * into them when a move runs off the edge of the page (Left from the
+     * first poster -> tab bar, Up from the first row -> top bar).
+     * Fullscreen / "open in browser" are left out on purpose (fullscreen
+     * crashes the VIDAA browser).
+     */
+    (function () {
+        var log = logger('nav');
+        var SECTIONS = [
+            { id: 'vidaa-navbar', selector: '#navbar .tab', enterTo: 'last-focused' },
+            { id: 'vidaa-topbar', selector: '#topbar .back, #global-search-field, #window-controls li[ng-click*="userMenuOpen"]' },
+            { id: 'vidaa-usermenu', selector: '#user-panel a, #user-panel .option, #user-panel [tabindex]', restrict: 'self-first' }
+        ];
+        function navigable(el) {
+            if (!el) return false;
+            var r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        }
+        var tries = 0;
+        var t = setInterval(function () {
+            tries++;
+            var SN = window.SpatialNavigation;
+            if (!SN || !document.getElementById('navbar')) { if (tries > 120) clearInterval(t); return; }
+            clearInterval(t);
+            for (var i = 0; i < SECTIONS.length; i++) {
+                var cfg = SECTIONS[i];
+                cfg.navigableFilter = navigable;
+                try { SN.remove(cfg.id); } catch (e) {}
+                try { SN.add(cfg); SN.enable(cfg.id); } catch (e) { log.error('add section ' + cfg.id, e && e.message); }
+            }
+            try { SN.makeFocusable(); } catch (e) {}
+            log('tab bar + top bar navigable');
+        }, 250);
+
+        // Sections like 'board' use straightOnly, so a small tab never
+        // "lines up" with a tall poster and the library refuses to cross
+        // over. When a move fails at the page edge, take it ourselves:
+        // Left -> tab bar (the tab nearest vertically), Up -> top bar.
+        function nearestByY(list, y) {
+            var best = null, bd = Infinity;
+            for (var i = 0; i < list.length; i++) {
+                if (!navigable(list[i])) continue;
+                var r = list[i].getBoundingClientRect(), d = Math.abs((r.top + r.bottom) / 2 - y);
+                if (d < bd) { bd = d; best = list[i]; }
+            }
+            return best;
+        }
+        document.addEventListener('sn:navigatefailed', function (e) {
+            if (inPlayer()) return;
+            var SN = window.SpatialNavigation, from = e.target, dir = e.detail && e.detail.direction;
+            if (!SN || !from || !from.closest) return;
+            var r = from.getBoundingClientRect(), y = (r.top + r.bottom) / 2, target = null;
+            if (dir === 'left' && !from.closest('#navbar')) {
+                target = document.querySelector('#navbar .tab.selected');
+                if (!navigable(target)) target = nearestByY(document.querySelectorAll('#navbar .tab'), y);
+            } else if (dir === 'up' && !from.closest('#topbar, #window-controls')) {
+                var back = document.querySelector('#topbar .back');
+                target = navigable(back) ? back : document.querySelector('#window-controls li[ng-click*="userMenuOpen"]');
+            }
+            if (target && navigable(target)) { if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1'); SN.focus(target); }
+        });
+
+        // Elements Angular creates later (tabs via ng-repeat, the user
+        // panel) need tabindex for the library to treat them as focusable.
+        setInterval(function () {
+            var els = document.querySelectorAll('#window-controls li[ng-click*="userMenuOpen"], #user-panel .option, #topbar .back');
+            for (var i = 0; i < els.length; i++) if (!els[i].hasAttribute('tabindex')) els[i].setAttribute('tabindex', '-1');
+        }, 1000);
+
+        // OK on a focused tab / top-bar item / user-panel entry = click it.
+        onKey('enter', function (e) {
+            var a = document.activeElement;
+            if (!a || isTyping(e)) return;
+            if (a.closest && a.closest('#navbar, #topbar, #window-controls, #user-panel')) { a.click(); return false; }
+        }, { route: 'nonplayer', priority: 300 });
+    })();
+
     /* ============================================================== device */
     (function () {
         var log = logger('device');
@@ -318,7 +402,6 @@
      */
     var SUB_LANG_KEY = 'vidaa_v4_sub_lang';      // '' = off
     var SUB_DELAY_KEY = 'vidaa_v4_sub_delay';    // ms
-    var VOLUME_KEY = 'vidaa_v4_volume';
 
     function realSubTracks(v) {
         var out = [];
@@ -394,11 +477,17 @@
         if (!v || v.__vidaaHooked) return;
         v.__vidaaHooked = true;
         var log = logger('tracks');
-        // persist volume
+        // App volume is pinned at 100%, like Netflix & co: the TV's own
+        // volume keys are the only volume control. (v4 restores a saved
+        // volume and used Up/Down for it.)
         try {
-            var vol = parseFloat(store.get(VOLUME_KEY, ''));
-            if (isFinite(vol) && vol >= 0 && vol <= 1) v.volume = vol;
-            v.addEventListener('volumechange', function () { store.set(VOLUME_KEY, v.volume); });
+            var pin = function () {
+                if (v.volume !== 1) v.volume = 1;
+                if (v.muted) v.muted = false;
+            };
+            pin();
+            v.addEventListener('volumechange', pin);
+            v.addEventListener('loadedmetadata', pin);
         } catch (e) {}
         if (!v.textTracks) return;
         var autoDone = false;
@@ -518,6 +607,8 @@
         }, { priority: 1000, when: function () { return open; } });
         return { show: show, close: close, isOpen: function () { return open; }, kind: function () { return kind; } };
     })();
+    onKey(['escape', 'backspace'], function () { picker.close(); return false; },
+        { priority: 1000, when: function () { return picker.isOpen(); } });
 
     function openSubPicker() {
         var v = video();
@@ -568,15 +659,214 @@
         if (picker.isOpen() && picker.kind() === 'audio') { picker.close(); return; }
         openAudioPicker();
     }, { route: 'player', suppress: true });
-    // OK on the remote = play/pause in the player (v4 only bound Space)
-    onKey('enter', function () {
-        var v = video();
-        if (!v) return;
-        v.paused ? vplay() : vpause();
-        toast(v.paused ? 'Paused' : 'Playing', 900);
-        return false;
-    }, { route: 'player', priority: 100, when: function (e) { return !picker.isOpen() && !isTyping(e); } });
     onKey('yellow', function () { var v = video(); if (v) selectSub(v, -1); }, { route: 'player', suppress: true });
+
+    /* ===================================================== player remote
+     * v4's player is mouse-only: the control bar appears on mousemove,
+     * menus open on :hover (.control.active), and the arrow keys are bound
+     * to volume (Up/Down) and seek (Left/Right). This gives it a TV remote
+     * model like Netflix:
+     *
+     *   WATCH  (bar hidden)   Left/Right  seek -/+10s
+     *                         OK          play/pause
+     *                         Up/Down     show controls
+     *   NAV    (bar shown)    Left/Right  move between buttons
+     *                         Up          to the seek bar  (Left/Right seek there)
+     *                         Down        from seek bar back to buttons / hide bar
+     *                         OK          press button, or open its menu
+     *                         Back        hide controls
+     *   MENU   (popup open)   Up/Down     move, OK select, Back close
+     *
+     * Volume and casting are skipped (TV volume only; no streaming server).
+     */
+    var pc = (function () {
+        var mode = 'watch', row = 'buttons', ci = 0, pi = 0, popupCtl = null, items = [];
+        var keepAlive = null, idle = null;
+        var SKIP = { volumeControl: 1, castingControl: 1, streamingReport: 1 };
+
+        function bar() { return document.getElementById('controlbar'); }
+        function shown(el) {
+            if (!el) return false;
+            if (el.className && /\bng-hide\b/.test(el.className)) return false;
+            var r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        }
+        function buttons() {
+            var b = bar(), out = [];
+            if (!b) return out;
+            var all = b.querySelectorAll('.controls > .control');
+            for (var i = 0; i < all.length; i++) if (!SKIP[all[i].id] && shown(all[i])) out.push(all[i]);
+            return out;
+        }
+        function seekBar() { var b = bar(); return b ? b.querySelector('input') : null; }
+        function revealBar() {
+            var h = document.querySelectorAll('.hidable');
+            for (var i = 0; i < h.length; i++) h[i].className = h[i].className.replace(/\bhidden\b/g, '');
+        }
+        // v4's showHidable() shows the bar AND restarts its 4s auto-hide
+        // timer; that timer also closes any open menu (removes .active).
+        // Calling it every second keeps both alive while the remote is
+        // in use. Falls back to just un-hiding if the scope isn't there.
+        function keepShown() {
+            try {
+                var s = window.angular && angular.element(bar()).scope();
+                if (s && typeof s.showHidable === 'function') { s.showHidable(); return; }
+            } catch (e) {}
+            revealBar();
+        }
+        function hideBar() {
+            var b = bar();
+            if (b && !/\bhidden\b/.test(b.className)) b.className += ' hidden';
+        }
+        function clearFocus() {
+            var f = document.querySelectorAll('.vidaa-focus');
+            for (var i = 0; i < f.length; i++) f[i].className = f[i].className.replace(/\s*\bvidaa-focus\b/g, '');
+        }
+        function mark(el) { if (el && !/\bvidaa-focus\b/.test(el.className)) el.className += ' vidaa-focus'; }
+        function render() {
+            clearFocus();
+            if (mode === 'nav') {
+                if (row === 'seek') mark(seekBar());
+                else { var bs = buttons(); if (bs.length) { ci = Math.max(0, Math.min(ci, bs.length - 1)); mark(bs[ci]); } }
+            } else if (mode === 'menu') {
+                items = menuItems(popupCtl);
+                if (items.length) { pi = Math.max(0, Math.min(pi, items.length - 1)); mark(items[pi]); scrollIntoView(items[pi]); }
+            }
+        }
+        function scrollIntoView(el) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} }
+        function bumpIdle() {
+            clearTimeout(idle);
+            // controls fade back out after 8s untouched (not while a menu is open)
+            if (mode === 'nav') idle = setTimeout(function () { toWatch(); }, 8000);
+        }
+        function toNav(startRow) {
+            mode = 'nav'; row = startRow || 'buttons';
+            if (row === 'buttons') {
+                // start on play/pause
+                ci = 0;
+            }
+            keepShown();
+            clearInterval(keepAlive);
+            keepAlive = setInterval(keepShown, 1000);
+            render(); bumpIdle();
+        }
+        function toWatch() {
+            closeMenu(true);
+            mode = 'watch'; clearFocus();
+            clearInterval(keepAlive); clearTimeout(idle);
+            hideBar();
+        }
+        function menuItems(ctl) {
+            if (!ctl) return [];
+            var pop = ctl.querySelector('.popup');
+            if (!pop) return [];
+            var cand = pop.querySelectorAll('li, .toggle, .box .button, .box > div[ng-click], .player-setting');
+            var out = [];
+            for (var i = 0; i < cand.length; i++) if (shown(cand[i])) out.push(cand[i]);
+            return out;
+        }
+        function openMenu(ctl) {
+            popupCtl = ctl;
+            if (!/\bactive\b/.test(ctl.className)) ctl.className += ' active';
+            mode = 'menu'; clearTimeout(idle);
+            items = menuItems(ctl);
+            pi = 0;
+            for (var i = 0; i < items.length; i++) if (/\bselected\b/.test(items[i].className)) { pi = i; break; }
+            if (!items.length) { toast('Nothing to choose here'); closeMenu(); return; }
+            render();
+        }
+        function closeMenu(silent) {
+            if (popupCtl) popupCtl.className = popupCtl.className.replace(/\s*\bactive\b/g, '');
+            popupCtl = null;
+            if (!silent && mode === 'menu') { mode = 'nav'; render(); bumpIdle(); }
+        }
+        function press() {
+            if (mode === 'nav') {
+                if (row === 'seek') { var v = video(); if (v) { v.paused ? vplay() : vpause(); } return; }
+                var b = buttons()[ci];
+                if (!b) return;
+                if (b.querySelector('.popup')) { openMenu(b); return; }
+                b.click();
+                setTimeout(render, 60);
+                bumpIdle();
+            } else if (mode === 'menu') {
+                var it = items[pi];
+                if (!it) return;
+                it.click();
+                // list choices (language, speed, audio...) close the menu;
+                // steppers (+/- delay, size) and toggles stay open for repeats
+                if (it.tagName === 'LI' && !/select-squares/.test(it.parentNode && it.parentNode.className)) closeMenu();
+                else setTimeout(render, 60);
+            }
+        }
+        // Seek the <video> directly (v4's player tracks it via timeupdate,
+        // so watch-progress stays right), and refresh v4's time label,
+        // which it otherwise only redraws on its own schedule.
+        function seekRel(sec) {
+            var v = video();
+            if (!v || !isFinite(v.currentTime)) return;
+            var t = Math.max(0, v.currentTime + sec);
+            if (isFinite(v.duration)) t = Math.min(t, v.duration - 1);
+            v.currentTime = t;
+            try {
+                var lbl = document.querySelector('#controlbar .play-progress-text');
+                if (lbl && isFinite(v.duration)) lbl.textContent = fmt(t) + ' / ' + fmt(v.duration);
+            } catch (e) {}
+            toast((sec > 0 ? '▶▶ ' : '◀◀ ') + fmt(t) + (isFinite(v.duration) ? ' / ' + fmt(v.duration) : ''), 1000);
+        }
+        function fmt(s) {
+            s = Math.floor(s); var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+            return (h ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (x < 10 ? '0' : '') + x;
+        }
+
+        onKey(['up', 'down', 'left', 'right', 'enter'], function (e) {
+            var k = e.keyCode;
+            if (mode === 'watch') {
+                if (k === 37) seekRel(-10);
+                else if (k === 39) seekRel(10);
+                else if (k === 13) { var v = video(); if (v) { v.paused ? vplay() : vpause(); toast(v.paused ? 'Paused' : 'Playing', 900); } }
+                else toNav('buttons');
+                return false;
+            }
+            if (mode === 'nav') {
+                bumpIdle();
+                if (k === 13) { press(); return false; }
+                if (row === 'seek') {
+                    if (k === 37) seekRel(-10);
+                    else if (k === 39) seekRel(10);
+                    else if (k === 40) { row = 'buttons'; render(); }
+                    return false;
+                }
+                var n = buttons().length;
+                if (k === 37) ci = Math.max(0, ci - 1);
+                else if (k === 39) ci = Math.min(n - 1, ci + 1);
+                else if (k === 38) row = 'seek';
+                else if (k === 40) { toWatch(); return false; }
+                render();
+                return false;
+            }
+            if (mode === 'menu') {
+                if (k === 13) { press(); return false; }
+                if (k === 38 || k === 37) pi = Math.max(0, pi - 1);
+                else if (k === 40 || k === 39) pi = Math.min(items.length - 1, pi + 1);
+                render();
+                return false;
+            }
+        }, { route: 'player', priority: 500, when: function (e) { return !picker.isOpen() && !isTyping(e); } });
+
+        // Back: menu -> controls -> hidden -> (falls through) leave player.
+        // Escape/Backspace too: some VIDAA firmwares send 8 for Back.
+        onKey(['back', 'escape', 'backspace'], function () {
+            if (mode === 'menu') { closeMenu(); return false; }
+            if (mode === 'nav') { toWatch(); return false; }
+        }, { route: 'player', priority: 850, when: function (e) { return !picker.isOpen() && !isTyping(e); } });
+
+        // leaving the player resets everything
+        window.addEventListener('hashchange', function () { if (!inPlayer() && mode !== 'watch') toWatch(); });
+
+        return { mode: function () { return mode; }, toNav: toNav, toWatch: toWatch };
+    })();
+    window.__vidaaPlayerRemote = pc;
 
     /* ================================================================ info */
     var infoEl = null;
