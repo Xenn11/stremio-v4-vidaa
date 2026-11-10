@@ -1,0 +1,49 @@
+/* Stremio v4.4 — VIDAA layer styles */
+
+/* Visible D-pad focus from across the room */
+[focused], :focus,
+.spatial-nav-focus, [spatial-nav-focused] {
+    outline: 3px solid #8a5aff !important;
+    outline-offset: 2px;
+}
+input:focus { outline-offset: 0; }
+
+/* Desktop-app nags that make no sense on a TV */
+#updateModal,
+.bottom-notification { display: none !important; }
+
+/* Toast */
+#vidaa-toast {
+    position: fixed; left: 50%; top: 12%;
+    transform: translateX(-50%);
+    background: rgba(12, 10, 24, 0.92); color: #fff;
+    padding: 14px 28px; border-radius: 10px;
+    font: 600 22px/1.3 PlusJakartaSans, sans-serif;
+    z-index: 2147483000; pointer-events: none;
+    opacity: 0; transition: opacity .35s;
+    box-shadow: 0 6px 24px rgba(0,0,0,.5);
+}
+
+/* Track picker + info panel */
+#vidaa-picker, #vidaa-info {
+    position: fixed; right: 4%; top: 50%;
+    transform: translateY(-50%);
+    min-width: 380px; max-width: 46%; max-height: 80%;
+    overflow: hidden;
+    background: rgba(12, 10, 24, 0.95); color: #fff;
+    border: 1px solid rgba(138, 90, 255, .5);
+    border-radius: 14px; padding: 18px 0;
+    font: 500 22px/1.35 PlusJakartaSans, sans-serif;
+    z-index: 2147483001;
+    box-shadow: 0 10px 40px rgba(0,0,0,.6);
+}
+#vidaa-picker { display: none; }
+#vidaa-picker .vp-title, #vidaa-info .vp-title {
+    font-weight: 700; font-size: 24px; padding: 0 24px 12px; opacity: .9;
+}
+#vidaa-picker .vp-item { padding: 10px 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#vidaa-picker .vp-item.vp-active { color: #b9a1ff; }
+#vidaa-picker .vp-item.vp-focus { background: #8a5aff; color: #fff; }
+#vidaa-picker .vp-hint { padding: 12px 24px 0; font-size: 16px; opacity: .55; }
+#vidaa-info .vi-row { display: flex; justify-content: space-between; gap: 24px; padding: 4px 24px; font-size: 19px; }
+#vidaa-info .vi-row span { opacity: .65; }
