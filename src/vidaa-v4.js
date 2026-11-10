@@ -338,20 +338,90 @@
             }
             return best;
         }
+        function tabTarget(y) {
+            var t = document.querySelector('#navbar .tab.selected');
+            if (!navigable(t)) t = nearestByY(document.querySelectorAll('#navbar .tab'), y);
+            if (!navigable(t)) t = document.querySelector('#topbar .back');   // detail page: no tab bar
+            return navigable(t) ? t : null;
+        }
+        function accountTarget() {
+            var t = document.querySelector('#window-controls li[ng-click*="userMenuOpen"]');
+            return navigable(t) ? t : null;
+        }
+        function focusEl(t) {
+            if (!t) return false;
+            if (!t.hasAttribute('tabindex')) t.setAttribute('tabindex', '-1');
+            try { if (window.SpatialNavigation.focus(t)) return true; } catch (e) {}
+            try { t.focus(); return true; } catch (e) { return false; }
+        }
+        // Focus the current page's own content (whichever v4 section is live).
+        var CONTENT = ['search', 'board', 'discover-items', 'library-port', 'addons-list', 'calendar', 'settings', 'detail'];
+        function focusContent() {
+            var SN = window.SpatialNavigation;
+            for (var i = 0; i < CONTENT.length; i++) {
+                try { if (SN.focus(CONTENT[i])) return true; } catch (e) {}
+            }
+            return false;
+        }
+        // Close v4's "last searches" dropdown (its section is restrict:
+        // self-only and would otherwise trap the D-pad).
+        function closeSearchUI() {
+            try {
+                var inp = document.getElementById('global-search-field');
+                var sc = window.angular && angular.element(inp).scope();
+                if (sc) {
+                    var apply = function () { sc.$root.searchOpened = false; sc.searchNavActive = false; };
+                    if (sc.$root.$$phase) apply(); else sc.$apply(apply);
+                }
+                if (inp && document.activeElement === inp) inp.blur();
+            } catch (e) {}
+        }
+
         document.addEventListener('sn:navigatefailed', function (e) {
             if (inPlayer()) return;
             var SN = window.SpatialNavigation, from = e.target, dir = e.detail && e.detail.direction;
             if (!SN || !from || !from.closest) return;
             var r = from.getBoundingClientRect(), y = (r.top + r.bottom) / 2, target = null;
+            var inSearchUI = !!from.closest('#search-form-container');
+            if (inSearchUI) {
+                // escape hatches out of the search bar / last-searches dropdown
+                if (dir === 'left') target = tabTarget(y);
+                else if (dir === 'right') target = accountTarget();
+                else if (dir === 'down') { closeSearchUI(); focusContent(); return; }
+                if (target) { closeSearchUI(); focusEl(target); }
+                return;
+            }
             if (dir === 'left' && !from.closest('#navbar')) {
-                target = document.querySelector('#navbar .tab.selected');
-                if (!navigable(target)) target = nearestByY(document.querySelectorAll('#navbar .tab'), y);
+                target = tabTarget(y);
             } else if (dir === 'up' && !from.closest('#topbar, #window-controls')) {
                 var back = document.querySelector('#topbar .back');
-                target = navigable(back) ? back : document.querySelector('#window-controls li[ng-click*="userMenuOpen"]');
+                target = navigable(back) ? back : accountTarget();
+            } else if (dir === 'down' && from.closest('#topbar, #window-controls')) {
+                focusContent(); return;
             }
-            if (target && navigable(target)) { if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1'); SN.focus(target); }
+            if (target && navigable(target)) focusEl(target);
         });
+
+        // The search <input> itself: js-spatial-navigation leaves arrow keys
+        // to the text field, so you could never get out without searching.
+        // Left/Right still move the caret inside the text; at either end
+        // (or with an empty box) they leave the field.
+        onKey(['left', 'right', 'up', 'down'], function (e) {
+            var a = document.activeElement;
+            if (!a || a.id !== 'global-search-field') return;
+            var k = e.keyCode, len = (a.value || '').length;
+            var s = typeof a.selectionStart === 'number' ? a.selectionStart : len;
+            var en = typeof a.selectionEnd === 'number' ? a.selectionEnd : len;
+            if (k === 37 && s > 0) return;          // caret can still move left
+            if (k === 39 && en < len) return;       // caret can still move right
+            var r = a.getBoundingClientRect(), y = (r.top + r.bottom) / 2;
+            if (k === 38) return false;             // nothing above the top bar
+            closeSearchUI();
+            if (k === 37) focusEl(tabTarget(y));
+            else if (k === 39) focusEl(accountTarget());
+            else if (k === 40) focusContent();
+            return false;
+        }, { route: 'nonplayer', priority: 600 });
 
         // Elements Angular creates later (tabs via ng-repeat, the user
         // panel) need tabindex for the library to treat them as focusable.
@@ -793,8 +863,24 @@
                 var it = items[pi];
                 if (!it) return;
                 it.click();
-                // list choices (language, speed, audio...) close the menu;
-                // steppers (+/- delay, size) and toggles stay open for repeats
+                // The subtitles menu is two-level: pick a language, then its
+                // variants (numbered squares: the individual subtitle files
+                // from your addons) appear below, plus delay/size. So it
+                // stays open and re-reads its entries as they load in.
+                if (popupCtl && popupCtl.id === 'subIcon') {
+                    var keep = it;
+                    var refresh = function () {
+                        if (mode !== 'menu') return;
+                        items = menuItems(popupCtl);
+                        var j = items.indexOf(keep);
+                        if (j !== -1) pi = j;
+                        render();
+                    };
+                    setTimeout(refresh, 80); setTimeout(refresh, 600); setTimeout(refresh, 1500);
+                    return;
+                }
+                // other list choices (speed, audio...) close the menu;
+                // steppers and toggles stay open for repeats
                 if (it.tagName === 'LI' && !/select-squares/.test(it.parentNode && it.parentNode.className)) closeMenu();
                 else setTimeout(render, 60);
             }
@@ -847,6 +933,24 @@
             }
             if (mode === 'menu') {
                 if (k === 13) { press(); return false; }
+                // Subtitles menu has two columns: languages | (variants 1,2,3..,
+                // delay, size). Left/Right jump between them so you don't
+                // scroll through every language to reach the variants.
+                if ((k === 37 || k === 39) && popupCtl && popupCtl.id === 'subIcon') {
+                    var cur = items[pi];
+                    var inOptions = !!(cur && cur.closest && cur.closest('.options'));
+                    var j, want = -1;
+                    if (k === 39 && !inOptions) {
+                        for (j = 0; j < items.length; j++) if (items[j].closest('.options') && /\bselected\b/.test(items[j].className)) { want = j; break; }
+                        if (want === -1) for (j = 0; j < items.length; j++) if (items[j].closest('.options')) { want = j; break; }
+                    } else if (k === 37 && inOptions) {
+                        for (j = 0; j < items.length; j++) if (!items[j].closest('.options') && /\bselected\b/.test(items[j].className)) { want = j; break; }
+                        if (want === -1) for (j = 0; j < items.length; j++) if (!items[j].closest('.options')) { want = j; break; }
+                    }
+                    if (want !== -1) pi = want;
+                    render();
+                    return false;
+                }
                 if (k === 38 || k === 37) pi = Math.max(0, pi - 1);
                 else if (k === 40 || k === 39) pi = Math.min(items.length - 1, pi + 1);
                 render();
@@ -884,8 +988,14 @@
             var src = v.currentSrc || v.src || '';
             rows.push(['Host', src.replace(/^https?:\/\//, '').split('/')[0]]);
         } else rows.push(['Video', 'none']);
+        // UI render resolution: CSS viewport x devicePixelRatio = real pixels
+        var dpr = window.devicePixelRatio || 1;
+        rows.push(['UI viewport', window.innerWidth + ' × ' + window.innerHeight + ' @' + (Math.round(dpr * 100) / 100) + 'x']);
+        rows.push(['UI pixels', Math.round(window.innerWidth * dpr) + ' × ' + Math.round(window.innerHeight * dpr)]);
+        rows.push(['Screen', (screen.width || '?') + ' × ' + (screen.height || '?')]);
         var caps = window.__VIDAA_CAPS__ || {};
         if (caps.model) rows.push(['TV', caps.model]);
+        if (caps.panelRes) rows.push(['Panel', typeof caps.panelRes === 'object' ? JSON.stringify(caps.panelRes) : caps.panelRes]);
         rows.push(['Layer', 'vidaa-v4 ' + VERSION]);
         var html = '<div class="vp-title">Stream info</div>';
         for (var i = 0; i < rows.length; i++) html += '<div class="vi-row"><span>' + esc(rows[i][0]) + '</span><b>' + esc(rows[i][1]) + '</b></div>';
