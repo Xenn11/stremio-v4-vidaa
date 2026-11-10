@@ -444,37 +444,79 @@
     }
     setInterval(function () { if (inPlayer()) { var v = video(); if (v) hookVideo(v); } }, 1000);
 
-    /* ---- picker overlay (D-pad driven, captures keys while open) ---- */
+    /* ---- picker overlay ----
+     * Works with the D-pad (keys captured while open) AND with the VIDAA
+     * pointer: in the TV Browser the arrow keys move a cursor and never
+     * reach the page, so every row is clickable, there is a close (X)
+     * button, the opening colour key toggles it shut, and it auto-closes
+     * after 15s without input so it can never get stuck on screen. */
     var picker = (function () {
-        var el = null, items = [], idx = 0, open = false;
-        function render(title) {
-            var html = '<div class="vp-title">' + esc(title) + '</div>';
+        var el = null, items = [], idx = 0, open = false, kind = '', title = '', idleTimer = null;
+        var IDLE_MS = 15000;
+        function bumpIdle() { clearTimeout(idleTimer); idleTimer = setTimeout(close, IDLE_MS); }
+        function render() {
+            var html = '<div class="vp-head"><div class="vp-title">' + esc(title) + '</div>' +
+                '<div class="vp-close" data-act="close">&#10005;</div></div>';
             for (var i = 0; i < items.length; i++) {
-                html += '<div class="vp-item' + (i === idx ? ' vp-focus' : '') + (items[i].active ? ' vp-active' : '') + '">' +
-                    (items[i].active ? '&#10003; ' : '') + esc(items[i].label) + '</div>';
+                var it = items[i];
+                html += '<div class="vp-item' + (i === idx ? ' vp-focus' : '') + (it.active ? ' vp-active' : '') + '" data-i="' + i + '">';
+                if (it.adjust) {
+                    html += '<span class="vp-btn" data-i="' + i + '" data-dir="-1">&minus;</span>' +
+                        '<span class="vp-label">' + esc(it.label) + '</span>' +
+                        '<span class="vp-btn" data-i="' + i + '" data-dir="1">+</span>';
+                } else {
+                    html += (it.active ? '&#10003; ' : '') + esc(it.label);
+                }
+                html += '</div>';
             }
-            html += '<div class="vp-hint">&#8597; choose &nbsp; OK select &nbsp; Back close</div>';
+            html += '<div class="vp-hint">&#8597; choose &nbsp; OK select &nbsp; Back / same colour key closes</div>';
             el.innerHTML = html;
         }
-        var title = '';
-        function show(t, list) {
-            title = t; items = list; idx = 0;
+        function activate(i) {
+            var it = items[i];
+            if (!it || it.adjust) return;
+            close();
+            if (it.run) it.run();
+        }
+        function onClick(e) {
+            var t = e.target;
+            while (t && t !== el && !t.getAttribute('data-i') && !t.getAttribute('data-act')) t = t.parentNode;
+            if (!t || t === el) return;
+            e.preventDefault(); e.stopPropagation();
+            if (t.getAttribute('data-act') === 'close') { close(); return; }
+            var i = parseInt(t.getAttribute('data-i'), 10);
+            var dir = t.getAttribute('data-dir');
+            idx = i;
+            if (dir && items[i] && items[i].adjust) { items[i].adjust(parseInt(dir, 10)); render(); bumpIdle(); return; }
+            activate(i);
+        }
+        function show(k, t, list) {
+            kind = k; title = t; items = list; idx = 0;
             for (var i = 0; i < items.length; i++) if (items[i].active) { idx = i; break; }
-            if (!el) { el = document.createElement('div'); el.id = 'vidaa-picker'; document.body.appendChild(el); }
-            render(title);
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'vidaa-picker';
+                el.addEventListener('click', onClick, true);
+                // keep pointer clicks from reaching the player underneath
+                el.addEventListener('mousedown', function (e) { e.stopPropagation(); }, true);
+                document.body.appendChild(el);
+            }
+            render();
             el.style.display = 'block';
             open = true;
+            bumpIdle();
         }
-        function close() { open = false; if (el) el.style.display = 'none'; }
+        function close() { open = false; kind = ''; clearTimeout(idleTimer); if (el) el.style.display = 'none'; }
         onKey(['up', 'down', 'enter', 'left', 'right'], function (e) {
+            bumpIdle();
             if (e.keyCode === 38) idx = (idx - 1 + items.length) % items.length;
             else if (e.keyCode === 40) idx = (idx + 1) % items.length;
-            else if (e.keyCode === 13) { var it = items[idx]; close(); if (it && it.run) it.run(); return false; }
-            else if (e.keyCode === 37 || e.keyCode === 39) { var cur = items[idx]; if (cur && cur.adjust) { cur.adjust(e.keyCode === 39 ? 1 : -1); render(title); } return false; }
-            render(title);
+            else if (e.keyCode === 13) { activate(idx); return false; }
+            else if (e.keyCode === 37 || e.keyCode === 39) { var cur = items[idx]; if (cur && cur.adjust) cur.adjust(e.keyCode === 39 ? 1 : -1); }
+            render();
             return false;
         }, { priority: 1000, when: function () { return open; } });
-        return { show: show, close: close, isOpen: function () { return open; } };
+        return { show: show, close: close, isOpen: function () { return open; }, kind: function () { return kind; } };
     })();
 
     function openSubPicker() {
@@ -498,13 +540,13 @@
                 store.set(SUB_DELAY_KEY, d);
                 var s = realSubTracks(v);
                 for (var k = 0; k < s.length; k++) applyDelay(s[k].track);
-                delayItem.label = 'Delay: ' + (d > 0 ? '+' : '') + d + ' ms  (← →)';
+                delayItem.label = 'Delay ' + (d > 0 ? '+' : '') + d + ' ms';
             }
         };
         var d0 = parseInt(store.get(SUB_DELAY_KEY, '0'), 10) || 0;
-        delayItem.label = 'Delay: ' + (d0 > 0 ? '+' : '') + d0 + ' ms  (← →)';
+        delayItem.label = 'Delay ' + (d0 > 0 ? '+' : '') + d0 + ' ms';
         list.push(delayItem);
-        picker.show(subs.length ? 'Embedded subtitles' : 'No embedded subtitles in this file', list);
+        picker.show('subs', subs.length ? 'Embedded subtitles' : 'No embedded subtitles in this file', list);
     }
     function openAudioPicker() {
         var v = video();
@@ -515,10 +557,25 @@
         for (var i = 0; i < a.length; i++) {
             (function (t, n) { list.push({ label: trackName(t.track, n, 'Audio'), active: !!t.track.enabled, run: function () { selectAudio(v, t.index); } }); })(a[i], i);
         }
-        picker.show('Audio track', list);
+        picker.show('audio', 'Audio track', list);
     }
-    onKey(['red', 'subtitle'], function () { openSubPicker(); }, { route: 'player', suppress: true });
-    onKey(['green', 'audio'], function () { openAudioPicker(); }, { route: 'player', suppress: true });
+    // the same colour key toggles its picker shut (works even when Back/arrows are eaten by cursor mode)
+    onKey(['red', 'subtitle'], function () {
+        if (picker.isOpen() && picker.kind() === 'subs') { picker.close(); return; }
+        openSubPicker();
+    }, { route: 'player', suppress: true });
+    onKey(['green', 'audio'], function () {
+        if (picker.isOpen() && picker.kind() === 'audio') { picker.close(); return; }
+        openAudioPicker();
+    }, { route: 'player', suppress: true });
+    // OK on the remote = play/pause in the player (v4 only bound Space)
+    onKey('enter', function () {
+        var v = video();
+        if (!v) return;
+        v.paused ? vplay() : vpause();
+        toast(v.paused ? 'Paused' : 'Playing', 900);
+        return false;
+    }, { route: 'player', priority: 100, when: function (e) { return !picker.isOpen() && !isTyping(e); } });
     onKey('yellow', function () { var v = video(); if (v) selectSub(v, -1); }, { route: 'player', suppress: true });
 
     /* ================================================================ info */

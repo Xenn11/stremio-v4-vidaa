@@ -86,8 +86,16 @@ def main():
         print("        - " + rel + ": " + err)
 
     print("[3/4] docs")
-    if os.path.isdir(DIST):
-        shutil.rmtree(DIST)
+    # Empty docs/ in place rather than deleting the folder: on Windows a
+    # running server or shell holding the folder open makes rmdir fail
+    # *after* the contents are gone.
+    os.makedirs(DIST, exist_ok=True)
+    for name in os.listdir(DIST):
+        p = os.path.join(DIST, name)
+        if os.path.isdir(p):
+            shutil.rmtree(p)
+        else:
+            os.remove(p)
     os.makedirs(os.path.join(DIST, "vidaa"))
     for rel in ok:
         dst = os.path.join(DIST, rel.replace("/", os.sep))
@@ -101,6 +109,23 @@ def main():
 
     # root-absolute asset paths -> relative (works under any sub-path)
     js_out = re.sub(rb"([\"'])/((?:images|fonts)/)", rb"\1\2", js)
+
+    # Exact-match source patches. Each must match exactly once or the build
+    # fails, so an upstream change can never silently drop a fix.
+    SOURCE_PATCHES = [
+        (
+            "silence casting poll error (no streaming server on VIDAA; debrid doesn't need one)",
+            b'.catch((function(e){c.error("ERR_CASTING_UPDATE_TITLE",e.message)}))',
+            b'.catch((function(e){}))',
+        ),
+    ]
+    for desc, old, new in SOURCE_PATCHES:
+        n = js_out.count(old)
+        if n != 1:
+            sys.exit("ERROR: source patch '%s' matched %d times (expected 1)" % (desc, n))
+        js_out = js_out.replace(old, new)
+        print("      patched: " + desc)
+
     with open(os.path.join(DIST, "blob.js"), "wb") as f:
         f.write(js_out)
     with open(os.path.join(DIST, "blob.css"), "wb") as f:

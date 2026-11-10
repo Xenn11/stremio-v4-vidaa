@@ -41,7 +41,21 @@ input:focus { outline-offset: 0; }
 #vidaa-picker .vp-title, #vidaa-info .vp-title {
     font-weight: 700; font-size: 24px; padding: 0 24px 12px; opacity: .9;
 }
-#vidaa-picker .vp-item { padding: 10px 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#vidaa-picker .vp-head { display: flex; align-items: center; justify-content: space-between; padding-right: 14px; }
+#vidaa-picker .vp-head .vp-title { padding-bottom: 12px; }
+#vidaa-picker .vp-close {
+    width: 40px; height: 40px; margin-bottom: 12px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,.12); cursor: pointer; font-size: 20px;
+}
+#vidaa-picker .vp-close:hover { background: #8a5aff; }
+#vidaa-picker .vp-item { padding: 10px 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+#vidaa-picker .vp-item:hover { background: rgba(138, 90, 255, .45); }
+#vidaa-picker .vp-item .vp-btn {
+    display: inline-block; width: 40px; text-align: center; border-radius: 8px;
+    background: rgba(255,255,255,.14); margin: 0 10px; cursor: pointer; font-weight: 700;
+}
+#vidaa-picker .vp-item .vp-btn:hover { background: #fff; color: #120c24; }
 #vidaa-picker .vp-item.vp-active { color: #b9a1ff; }
 #vidaa-picker .vp-item.vp-focus { background: #8a5aff; color: #fff; }
 #vidaa-picker .vp-hint { padding: 12px 24px 0; font-size: 16px; opacity: .55; }
